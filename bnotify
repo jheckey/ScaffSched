@@ -1,0 +1,93 @@
+#!/usr/bin/perl
+
+use strict;
+use Cwd;
+use Getopt::Std;
+use POSIX qw(setsid);
+
+our ($opt_h, $opt_t, $opt_d, $opt_c, $opt_m);
+getopts('ht:d:m:c:');
+
+# Default notifications
+#my @recipients = qw(heckeyje);
+my @recipients = qw(heckeyje);
+
+my $HELP = <<EOF;
+usage: $0 [-m <UNIX ID>[,UNIX ID, ...]] [-d <build dir>] <bjob id>
+
+    -m <UNIX ID>[,UNIX ID, ...]     Specify additional targets 
+                                    (',' or ' ' delimited)
+    -d <build dir>                  Build directory to launch in
+    -c <cmd>                        Command to run from build directory
+                                    for notify email
+
+$0 launches in the background and monitors the bjob ID. Once the job 
+completes, it will email the listed recipients, including any specified:
+    @recipients
+
+EOF
+
+if (defined $opt_h) {
+    print $HELP;
+    exit;
+}
+
+# Add additional mail recipients
+push(@recipients, split(/[, ]+/, $opt_m))    if (defined $opt_m);
+
+# Default top-level
+#$opt_t = "pm8301" if (!defined $opt_t);
+
+# Override the path to the dir
+#$opt_d = "../fpga_syn/fpga_$opt_t/EP4SGX530KH40C2ES"    if (!defined $opt_d);
+$opt_d = '.'  if (!defined $opt_d);
+
+# Default command
+#$opt_c = "/proj/sfm6g/bin/check.bat -t $opt_t" if (!defined $opt_c);
+
+# Get ready to run
+my $jobid = $ARGV[0] || die "Please give a Job ID\n";
+
+# Fork
+my $pid = fork();
+die "Can't fork: $!" unless defined $pid;
+
+# Print settings (only launching call)
+if ($pid) {
+    print "Using Job ID $jobid\n";
+    print "Notifying @recipients\n";
+    print "Build dir is $opt_d\n";
+    print "Background PID is $pid\n";
+}
+
+# Auto nohup
+exit 0 if $pid;
+setsid();
+
+my $done = 0;
+my $stat = `bjobs $jobid`;
+die $stat   if ($stat =~ /Job <$jobid> is not found/);
+
+# Wait for job to complete
+while ($done == 0) {
+    $stat = `bjobs $jobid`;
+    if ($stat =~ /(?:DONE|EXIT)/) { $done = 1; }
+    else { sleep 1; }
+}
+
+my $msg = '';
+chdir($opt_d) || {$msg = "Unable to find dir $opt_d\n"};
+my $pwd = getcwd;
+$msg = `echo $pwd`;
+$msg .= "\n";
+$msg .= `$opt_c` if (defined $opt_c);
+
+open MSG, ">mail";
+print MSG $msg;
+#print MSG "mail @recipients -s \"JobId: $jobid Finished\" < mail\n";
+close MSG;
+system("mail @recipients -s \"JobId: $jobid Finished\" < mail");
+unlink 'mail';
+
+exit;
+
